@@ -10,9 +10,7 @@ VDataServer::VDataServer(){
 	if(!m_Sock.bind(QHostAddress::Any, settings.value("VDataServer/bindPort"), QUdpSocket::ShareAddress)) qDebug() << "Failed to bind to port" << settings.value("VDataServer/bindPort");
 	else  qDebug() << "Sucessful bind to port" << settings.value("VDataServer/bindPort").toString() << ":" << bindPort;
 	m_buffer = false;
-	QObject::connect(&m_Sock, SIGNAL(readyRead()),
-			this, SLOT(handlePendingDatagrams()));
-	m_AckTimeout = 2000;
+	QObject::connect(&m_Sock, SIGNAL(readyRead()), this, SLOT(handlePendingDatagrams()));
 
 }
 

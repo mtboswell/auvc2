@@ -2,8 +2,8 @@
  * @file vdatasocket.h
  * Class provides a VDatum (Simple Id/Data Format) Network Socket
  */
-#ifndef __VDataSOCKET_H
-#define __VDataSOCKET_H
+#ifndef __VDataCLIENT_H
+#define __VDataCLIENT_H
 
 #include "vdatum.h"
 #include <QUdpSocket>
@@ -14,7 +14,7 @@
 #include <QHash>
 #include <QStringList>
 
-class VDataSocket : public QObject {
+class VDataClient : public QObject {
 	Q_OBJECT
 	public:
 		/**
@@ -24,8 +24,8 @@ class VDataSocket : public QObject {
 		 * @param remoteAddr remote host
 		 * @param bindAddr local address to bind to
 		 */
-		VDataSocket(quint16 bindPort, quint16 remotePort, bool server = false, QHostAddress remoteAddr = QHostAddress::Null, QHostAddress bindAddr = QHostAddress::Any);
-		virtual ~VDataSocket();
+		VDataClient();
+		virtual ~VDataClient();
 
 	signals:
 		/**
@@ -93,7 +93,6 @@ class VDataSocket : public QObject {
 		void processDatagram(QByteArray, QHostAddress, quint16);
 
 	private:
-		bool m_Server;
 		QUdpSocket m_Sock;
 		QHostAddress m_remoteAddr;
 		QHostAddress m_localAddr;

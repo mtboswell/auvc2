@@ -1,18 +1,18 @@
-#include "vdatasocket.h"
+#include "vdataclient.h"
 #include <QDebug>
 
-VDataSocket::VDataSocket(quint16 bindPort, quint16 remotePort, bool server,
-		     QHostAddress remoteAddr, 
-		     QHostAddress bindAddr){
-	if(!m_Sock.bind(bindAddr, bindPort, QUdpSocket::ShareAddress)) qDebug() << "Failed to bind to port" << bindPort;
-	else  qDebug() << "Sucessful bind to port" << bindAddr.toString() << ":" << bindPort;
+VDataClient::VDataClient(){
+
+	if(!settings.contains("VDataServer/bindPort")) settings.setValue("VDataServer/bindPort", 5325);
+
+	if(!m_Sock.bind(QHostAddress::Any, settings.value("VDataServer/bindPort"), QUdpSocket::ShareAddress)) qDebug() << "Failed to bind to port" << settings.value("VDataServer/bindPort");
+	else  qDebug() << "Sucessful bind to port" << settings.value("VDataServer/bindPort").toString() << ":" << bindPort;
+
 	m_remoteAddr = remoteAddr;
 	m_remotePort = remotePort;
-	m_Server = server;
 	m_buffer = false;
 	m_flaky = false;
-	QObject::connect(&m_Sock, SIGNAL(readyRead()),
-			this, SLOT(handlePendingDatagrams()));
+	QObject::connect(&m_Sock, SIGNAL(readyRead()),	this, SLOT(handlePendingDatagrams()));
 	m_AckTimeout = 2000;
 
 //	if(config.isEmpty()) loadConfigFile(config);
@@ -21,33 +21,35 @@ VDataSocket::VDataSocket(quint16 bindPort, quint16 remotePort, bool server,
 	}
 }
 
-VDataSocket::~VDataSocket() {
+VDataClient::~VDataClient() {
 }
 
-void VDataSocket::setRemoteAddr(QString addr, quint16 port){
+void VDataClient::setRemoteAddr(QString addr, quint16 port){
 	if(!QHostAddress(addr).isNull()) m_remoteAddr = addr;
 	if(port != 0) m_remotePort = port;
-	if(!m_Server)
-		sendDatagram("Connect", true);
+	sendDatagram("Connect", true);
 }
 
-void VDataSocket::sendVDatum(VDatum message, bool critical) {
-	if (message.id != "Camera.Downward.Frame" && message.id != "Camera.Forward.Frame") {
-		m_outBuffer.append("VDatum");
-		m_outBuffer.append(serializeVDatum(message));
-		if(!m_buffer) {
-			sendDatagram(m_outBuffer, critical);
-			m_outBuffer.clear();
-		}
+void VDataClient::sendVDatum(VDatum message, bool critical) {
+	QByteArray serializedVDatum;
+	// do not send if over 65000 bytes
+	serializedVDatum.append("VDatum");
+	serializedVDatum.append(serializeVDatum(message));
+	if(serializedVDatum.size() < 65000)
+		m_outBuffer.append(serializedVDatum);
+	else qDebug() << "VDatum exceeds size limit for network transmission:" << message.id;
+	if(!m_buffer) {
+		sendDatagram(m_outBuffer, critical);
+		m_outBuffer.clear();
 	}
 }
 
 // sends data and checks for acks
-void VDataSocket::sendDatagram(QByteArray out, bool force) {
+void VDataClient::sendDatagram(QByteArray out, bool force) {
 
 	if(m_remoteAddr.isNull()) return;
 
-	if(force || m_Server){
+	if(force){
 		// skip error checking
 		if(out == "Connect") qDebug() << "Connecting...";
 	}else if(m_outQueue.size() > 10){
@@ -78,44 +80,42 @@ void VDataSocket::sendDatagram(QByteArray out, bool force) {
 		qDebug() << "Sent " << out << " to " + m_remoteAddr.toString() + ":" + QString::number(m_remotePort);
 	}
 
-	if(!m_Server){
-		m_Acks.insert(out, QTime::currentTime());
-		// remove acks more than AckTimeout old and let everyone know what went missing
-		foreach(QByteArray datagram, m_Acks.keys()){
-			if(m_Acks[datagram].msecsTo(QTime::currentTime()) > m_AckTimeout){
-				emit(noAck(datagram));
-				m_Acks.remove(datagram);
-			}
+	m_Acks.insert(out, QTime::currentTime());
+	// remove acks more than AckTimeout old and let everyone know what went missing
+	foreach(QByteArray datagram, m_Acks.keys()){
+		if(m_Acks[datagram].msecsTo(QTime::currentTime()) > m_AckTimeout){
+			emit(noAck(datagram));
+			m_Acks.remove(datagram);
 		}
 	}
 }
 
 // called by dashboard
-void VDataSocket::sync(){
+void VDataClient::sync(){
 	sendDatagram("Update:All", true);
 }
-void VDataSocket::sync(QTime last){
+void VDataClient::sync(QTime last){
 	timeLostConn = last;
 	QByteArray updateDat = "Update:";
 	updateDat.append(timeLostConn.toString("hh:mm:ss.zzz"));
 	sendDatagram(updateDat);
 }
 
-void VDataSocket::reconnect(){
+void VDataClient::reconnect(){
 	timeLostConn = QTime::currentTime();
 	sendDatagram("Connect", true);
 }
 
-void VDataSocket::setAckTimeout(int msecs){
+void VDataClient::setAckTimeout(int msecs){
 	m_AckTimeout = msecs;
 }
 
-void VDataSocket::sendDatagram(){
+void VDataClient::sendDatagram(){
 	if(!m_outQueue.isEmpty()) sendDatagram(m_outQueue.dequeue());
 }
 
 
-void VDataSocket::handlePendingDatagrams() {
+void VDataClient::handlePendingDatagrams() {
 	static QByteArray datagram;
 	static QHostAddress sender;
 	static quint16 senderPort;
@@ -126,67 +126,47 @@ void VDataSocket::handlePendingDatagrams() {
 
 		m_Sock.readDatagram(datagram.data(), datagram.size(), &sender, &senderPort);
 
-		if(!m_Server && m_Acks.contains(datagram)){ // check to see if incoming is an acknowledgement
-			if(datagram == "Connect") {
-				m_remoteAddr = sender;
-				qDebug() << "Connected to " << sender;
-				m_flaky = false;
-				while(!m_outQueue.isEmpty()) sendDatagram();
-				QByteArray updateDat = "Update:";
-				updateDat.append(timeLostConn.toString("hh:mm:ss.zzz"));
-				sendDatagram(updateDat);
-			}
-			m_Acks.remove(datagram); // and remove from unanswered list 
-		}else{
-			if(m_Server) {
-				// server echos to acknowledge received
-				//if(m_Server) m_Sock.writeDatagram(datagram, sender, senderPort);
-				m_Sock.writeDatagram(datagram, sender, senderPort);
-				if(datagram == "Connect") {
-					qDebug() << "Connected to " << sender;
-					m_remoteAddr = sender;
-				}
-				if(datagram.startsWith("Update:")){
-					qDebug() << "Synchronizing";
-					datagram = datagram.right(datagram.size()-7);
-					if(datagram == "All"){
-						emit syncData();
-					}else{
-						timeLostConn = QTime::fromString(datagram, "hh:mm:ss.zzz");
-						emit connectionRestored(timeLostConn);
-					}
-				}
-			}
+		// TODO - start in thread
+		processDatagram(datagram, sender, senderPort);
 
-			// TODO - start in thread
-			processDatagram(datagram, sender, senderPort);
+	}
+}
+
+void VDataClient::processDatagram(QByteArray datagram, QHostAddress fromAddr, quint16 fromPort){
+	if(m_Acks.contains(datagram)){ // check to see if incoming is an acknowledgement
+		if(datagram == "Connect") {
+			m_remoteAddr = sender;
+			qDebug() << "Connected to " << sender;
+			m_flaky = false;
+			while(!m_outQueue.isEmpty()) sendDatagram();
+			QByteArray updateDat = "Update:";
+			updateDat.append(timeLostConn.toString("hh:mm:ss.zzz"));
+			sendDatagram(updateDat);
 		}
+		m_Acks.remove(datagram); // and remove from unanswered list 
+	}else{
+		qDebug() << "Got Datagram:" << datagram;
 
+		if(!datagram.startsWith("VDatum")) return;
+		datagram = datagram.right(datagram.size()-6);
+
+		QList<VDatum> receivedMessage;
+		//qDebug() << "Parsing Datagram:" << datagram;
+		receivedMessage = parseVDatums(datagram);
+
+		if(fromPort){}
+		foreach (VDatum msg, receivedMessage) {
+			emit datumReceived(msg, fromAddr);
+			//qDebug() << "VDataClient emitting VDatum:" << msg.id;
+		}
 	}
 }
 
-void VDataSocket::processDatagram(QByteArray datagram, QHostAddress fromAddr, quint16 fromPort){
-	qDebug() << "Got Datagram:" << datagram;
-
-	if(!datagram.startsWith("VDatum")) return;
-	datagram = datagram.right(datagram.size()-6);
-
-	QList<VDatum> receivedMessage;
-	//qDebug() << "Parsing Datagram:" << datagram;
-	receivedMessage = parseVDatums(datagram);
-
-	if(fromPort){}
-	foreach (VDatum msg, receivedMessage) {
-		emit datumReceived(msg, fromAddr);
-		//qDebug() << "VDataSocket emitting VDatum:" << msg.id;
-	}
-}
-
-void VDataSocket::buffer(){
+void VDataClient::buffer(){
 	m_buffer = true;
 }
 
-void VDataSocket::flush(){
+void VDataClient::flush(){
 	m_buffer = false;
 	sendDatagram(m_outBuffer);
 	m_outBuffer.clear();
