@@ -1,0 +1,1 @@
+This is a large rewrite of the original AUVC, which I developed for the Virginia Tech AUV Team.
